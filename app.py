@@ -144,11 +144,23 @@ with tab_plan:
     else:
         plans, goal_dicts, rows = [], [], []
         for _, g in goals_df.iterrows():
-            yrs = float(g["Years"])
-            tgt = float(g["Target (today, ₹)"])
-            corpus = float(g.get("Existing corpus (₹)", 0) or 0)
-            p = plan_goal(rr.profile, str(g["Goal"]), str(g["Type"]),
-                          yrs, tgt, corpus)
+            # The dynamic editor leaves trailing/blank rows. Skip any row that
+            # is missing the essentials, and coerce types safely.
+            goal_name = "" if pd.isna(g["Goal"]) else str(g["Goal"]).strip()
+            if not goal_name or pd.isna(g["Years"]) or pd.isna(g["Target (today, ₹)"]):
+                continue
+            try:
+                yrs = float(g["Years"])
+                tgt = float(g["Target (today, ₹)"])
+            except (TypeError, ValueError):
+                continue
+            if yrs <= 0 or tgt <= 0:
+                continue
+            corpus_val = g.get("Existing corpus (₹)", 0)
+            corpus = 0.0 if pd.isna(corpus_val) else float(corpus_val)
+            gtype = "other" if pd.isna(g["Type"]) else str(g["Type"])
+
+            p = plan_goal(rr.profile, goal_name, gtype, yrs, tgt, corpus)
             plans.append(p)
             goal_dicts.append({"name": p.name, "years": yrs, "target_today": tgt})
             rows.append({
@@ -161,6 +173,10 @@ with tab_plan:
                 "Funding gap": inr(p.funding_gap),
                 "Monthly SIP": inr(p.required_sip),
             })
+
+        if not plans:
+            st.info("Enter at least one goal with a name, years, and target amount.")
+            st.stop()
 
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
