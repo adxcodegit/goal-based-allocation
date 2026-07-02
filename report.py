@@ -13,6 +13,8 @@ Design goals:
 
 from datetime import date
 
+from funds import aggregate_categories
+
 # --- Branding (edit here) -------------------------------------------------- #
 AUTHOR_NAME = "Aditya Nair"
 AUTHOR_TAGLINE = "Equity Research &middot; Portfolio Analytics"
@@ -53,7 +55,7 @@ def build_report(risk, plans, blend, gap, cma, client_name: str = "") -> str:
 
     goal_rows = "\n".join(
         f"""<tr>
-              <td class="l"><b>{p.name}</b><div class="tag">{p.goal_type}</div></td>
+              <td class="l"><b>{p.name}</b>{' <span class="ovr">override</span>' if p.overridden else ''}<div class="tag">{p.goal_type}</div></td>
               <td>{p.years:g}</td>
               <td class="alloc">{_alloc_bar(p.equity, p.debt)}</td>
               <td>{p.blended_return:.1%}</td>
@@ -77,6 +79,22 @@ def build_report(risk, plans, blend, gap, cma, client_name: str = "") -> str:
                      if client_name else "")
     mismatch_html = (f'<p class="callout">{risk.mismatch_note}</p>'
                      if risk.mismatch else "")
+
+    # Stage 2 — portfolio-level fund category breakdown
+    agg = aggregate_categories(plans)
+    max_w = max((r["weight"] for r in agg), default=1) or 1
+    cat_rows = "\n".join(
+        f"""<tr>
+              <td class="l">{r['category']}</td>
+              <td class="l"><span class="pill {'eqp' if r['sleeve']=='Equity' else 'dtp'}">{r['sleeve']}</span></td>
+              <td class="catbarcell">
+                <div class="catbar"><span class="{'eq' if r['sleeve']=='Equity' else 'dt'}"
+                     style="width:{r['weight']/max_w*100:.0f}%"></span></div>
+              </td>
+              <td class="hi" style="color:var(--navy)">{r['weight']*100:.1f}%</td>
+            </tr>"""
+        for r in agg
+    )
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -173,6 +191,17 @@ def build_report(risk, plans, blend, gap, cma, client_name: str = "") -> str:
   .badge.ok {{ background:var(--ok); }}
   .badge.bad {{ background:var(--bad); }}
   .note {{ font-size:11px; color:var(--muted); margin-top:8px; }}
+  .ovr {{ font-size:9px; font-weight:700; letter-spacing:.05em; color:#8a5a00;
+          background:#fbeecb; border:1px solid #f0dca8; border-radius:10px;
+          padding:1px 7px; vertical-align:middle; text-transform:uppercase; }}
+  .pill {{ font-size:9.5px; font-weight:600; letter-spacing:.04em; padding:2px 9px;
+           border-radius:20px; text-transform:uppercase; }}
+  .pill.eqp {{ background:#e7edf6; color:var(--navy2); }}
+  .pill.dtp {{ background:#f7efdd; color:#8a6320; }}
+  .catbarcell {{ width:42%; }}
+  .catbar {{ height:9px; border-radius:5px; background:var(--line); overflow:hidden; }}
+  .catbar .eq {{ display:block; height:100%; background:var(--navy2); }}
+  .catbar .dt {{ display:block; height:100%; background:var(--bronze); }}
   /* Footer */
   .foot {{ margin-top:26px; background:var(--navy); color:#c7d2e3;
            padding:20px 44px; }}
@@ -262,6 +291,18 @@ def build_report(risk, plans, blend, gap, cma, client_name: str = "") -> str:
       <span class="badge {feas_class}">{feas_label}</span>
       <span>{feas_text} &nbsp;Coverage of goals by current capacity: <b>{gap['coverage_pct']:g}%</b>.</span>
     </div>
+
+    <h2>Suggested fund categories</h2>
+    <p class="note" style="margin-top:0">SEBI scheme categories only (no scheme
+       names). Equity is shaped by risk profile; debt is duration-matched to
+       horizon; credit quality is kept high by default. Corpus-weighted across goals.</p>
+    <table>
+      <thead><tr>
+        <th class="l">Category</th><th class="l">Sleeve</th>
+        <th class="l">Relative weight</th><th>Allocation</th>
+      </tr></thead>
+      <tbody>{cat_rows}</tbody>
+    </table>
 
   </div>
 
