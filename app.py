@@ -1,0 +1,201 @@
+"""
+app.py
+======
+Streamlit front-end for the goal-based allocation tool.
+
+Run locally with:
+    streamlit run app.py
+
+The UI is intentionally thin — all finance logic lives in the engine modules
+(risk_profiler, allocator, planner) so it stays testable and reviewable.
+"""
+
+import pandas as pd
+import streamlit as st
+
+from config import CMA, RISK_PROFILES
+from risk_profiler import QUESTIONS, score_profile
+from allocator import goal_allocation, portfolio_allocation
+from planner import plan_goal, gap_analysis
+from report import build_report
+
+
+st.set_page_config(page_title="Goal-Based Allocation Tool", layout="wide")
+
+
+def inr(x: float) -> str:
+    x = float(x)
+    if abs(x) >= 1e7:
+        return f"₹{x/1e7:.2f} Cr"
+    if abs(x) >= 1e5:
+        return f"₹{x/1e5:.2f} L"
+    return f"₹{x:,.0f}"
+
+
+# --------------------------------------------------------------------------- #
+#  Sidebar: editable capital-market assumptions                               #
+# --------------------------------------------------------------------------- #
+st.sidebar.header("Capital market assumptions")
+st.sidebar.caption("Long-run, nominal, pre-tax. Update from a primary source.")
+CMA.equity_return = st.sidebar.number_input(
+    "Equity return (Nifty 50 TRI, p.a.)", 0.05, 0.20, CMA.equity_return, 0.005,
+    format="%.3f")
+CMA.debt_return = st.sidebar.number_input(
+    "Debt return (p.a.)", 0.03, 0.12, CMA.debt_return, 0.005, format="%.3f")
+CMA.general_inflation = st.sidebar.number_input(
+    "General inflation (p.a.)", 0.02, 0.12, CMA.general_inflation, 0.005,
+    format="%.3f")
+st.sidebar.caption(
+    "Seeded: equity 12% (Nifty 50 TRI ~12.4% 20-yr CAGR, Mar-2026), "
+    "debt 7%, inflation 6%. Education/healthcare inflate faster — see config.py."
+)
+
+st.title("Goal-Based Asset Allocation Tool")
+st.caption(
+    "Risk profile × time horizon → equity/debt split per goal → required SIP. "
+    "For education and demonstration; not investment advice."
+)
+
+tab_risk, tab_goals, tab_plan = st.tabs(
+    ["1 · Risk profile", "2 · Goals", "3 · Allocation & plan"]
+)
+
+
+# --------------------------------------------------------------------------- #
+#  Tab 1 — Risk questionnaire                                                  #
+# --------------------------------------------------------------------------- #
+with tab_risk:
+    st.subheader("Risk profiling questionnaire")
+    st.write(
+        "Answers measure two things separately: your **capacity** to take risk "
+        "(objective) and your **tolerance** for it (behavioural)."
+    )
+
+    answers = {}
+    cap_col, tol_col = st.columns(2)
+    with cap_col:
+        st.markdown("**Capacity — ability to take risk**")
+        for q in [q for q in QUESTIONS if q["dimension"] == "capacity"]:
+            labels = [o[0] for o in q["options"]]
+            choice = st.radio(q["text"], labels, key=q["id"])
+            answers[q["id"]] = dict(q["options"])[choice]
+    with tol_col:
+        st.markdown("**Tolerance — willingness to take risk**")
+        for q in [q for q in QUESTIONS if q["dimension"] == "tolerance"]:
+            labels = [o[0] for o in q["options"]]
+            choice = st.radio(q["text"], labels, key=q["id"])
+            answers[q["id"]] = dict(q["options"])[choice]
+
+    rr = score_profile(answers)
+    st.session_state["risk"] = rr
+
+    st.divider()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Capacity", f"{rr.capacity_score}/100")
+    m2.metric("Tolerance", f"{rr.tolerance_score}/100")
+    m3.metric("Blended", f"{rr.blended_score}/100")
+    m4.metric("Profile", rr.profile)
+    st.info(f"**{rr.profile}** — base allocation "
+            f"{rr.base_equity:.0%} equity / {1-rr.base_equity:.0%} debt. "
+            f"{RISK_PROFILES[rr.profile]['note']}")
+    if rr.mismatch:
+        st.warning(rr.mismatch_note)
+
+
+# --------------------------------------------------------------------------- #
+#  Tab 2 — Goals                                                               #
+# --------------------------------------------------------------------------- #
+with tab_goals:
+    st.subheader("Financial goals")
+    st.write("Enter each goal in **today's** money. It is inflated automatically.")
+
+    default = pd.DataFrame([
+        {"Goal": "Child education", "Type": "education", "Years": 15,
+         "Target (today, ₹)": 4_000_000, "Existing corpus (₹)": 500_000},
+        {"Goal": "Retirement", "Type": "retirement", "Years": 28,
+         "Target (today, ₹)": 30_000_000, "Existing corpus (₹)": 2_000_000},
+        {"Goal": "Car", "Type": "car", "Years": 4,
+         "Target (today, ₹)": 1_500_000, "Existing corpus (₹)": 0},
+    ])
+    edited = st.data_editor(
+        default, num_rows="dynamic", use_container_width=True,
+        column_config={
+            "Type": st.column_config.SelectboxColumn(
+                options=list(CMA.goal_inflation.keys())),
+            "Years": st.column_config.NumberColumn(min_value=1, max_value=45, step=1),
+        },
+    )
+    st.session_state["goals"] = edited
+    monthly_capacity = st.number_input(
+        "How much can you invest per month? (₹)", 0, 10_000_000, 150_000, 5_000)
+    st.session_state["capacity"] = monthly_capacity
+
+
+# --------------------------------------------------------------------------- #
+#  Tab 3 — Allocation & plan                                                   #
+# --------------------------------------------------------------------------- #
+with tab_plan:
+    st.subheader("Recommended allocation & funding plan")
+    rr = st.session_state.get("risk")
+    goals_df = st.session_state.get("goals")
+
+    if rr is None or goals_df is None or goals_df.empty:
+        st.info("Complete the risk questionnaire and enter at least one goal.")
+    else:
+        plans, goal_dicts, rows = [], [], []
+        for _, g in goals_df.iterrows():
+            yrs = float(g["Years"])
+            tgt = float(g["Target (today, ₹)"])
+            corpus = float(g.get("Existing corpus (₹)", 0) or 0)
+            p = plan_goal(rr.profile, str(g["Goal"]), str(g["Type"]),
+                          yrs, tgt, corpus)
+            plans.append(p)
+            goal_dicts.append({"name": p.name, "years": yrs, "target_today": tgt})
+            rows.append({
+                "Goal": p.name,
+                "Years": yrs,
+                "Equity": f"{p.equity:.0%}",
+                "Debt": f"{p.debt:.0%}",
+                "Exp. return": f"{p.blended_return:.1%}",
+                "Future cost": inr(p.future_value),
+                "Funding gap": inr(p.funding_gap),
+                "Monthly SIP": inr(p.required_sip),
+            })
+
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        blend = portfolio_allocation(rr.profile, goal_dicts)
+        ga = gap_analysis(plans, st.session_state.get("capacity", 0))
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Blended equity", f"{blend['equity']:.0%}")
+        c2.metric("Total SIP needed", inr(ga["total_required_sip"]))
+        c3.metric("Coverage", f"{ga['coverage_pct']}%")
+
+        if ga["feasible"]:
+            st.success(f"Plan is feasible — surplus of {inr(ga['surplus'])}/month.")
+        else:
+            st.error(
+                f"Shortfall of {inr(ga['shortfall'])}/month. Options: extend "
+                f"horizons, raise the monthly amount, or reprioritise goals."
+            )
+        st.caption(
+            "Allocation per goal is the risk-profile equity weight, capped by a "
+            "horizon glide-path (short goals are de-risked). Stage 2 will map "
+            "these equity/debt weights to specific fund categories."
+        )
+
+        st.divider()
+        st.markdown("#### Download report")
+        client_name = st.text_input("Name for the report (optional)", "")
+        html = build_report(rr, plans, blend, ga, CMA, client_name)
+        st.download_button(
+            "Download plan as report (HTML)",
+            data=html,
+            file_name="goal_based_allocation_report.html",
+            mime="text/html",
+        )
+        st.caption(
+            "Opens in any browser. To save as PDF, open it and use "
+            "Print → Save as PDF."
+        )
