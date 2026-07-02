@@ -17,6 +17,7 @@ from config import CMA, RISK_PROFILES
 from risk_profiler import QUESTIONS, score_profile
 from allocator import goal_allocation, portfolio_allocation
 from planner import plan_goal, gap_analysis
+from funds import aggregate_categories
 from report import build_report
 
 
@@ -108,14 +109,22 @@ with tab_risk:
 with tab_goals:
     st.subheader("Financial goals")
     st.write("Enter each goal in **today's** money. It is inflated automatically.")
+    st.caption(
+        "Leave **Equity override %** blank to use the engine's horizon-adjusted "
+        "allocation. Enter a number (0–100) to force a split for that goal — "
+        "useful when the calculated mix is more balanced than you want."
+    )
 
     default = pd.DataFrame([
         {"Goal": "Child education", "Type": "education", "Years": 15,
-         "Target (today, ₹)": 4_000_000, "Existing corpus (₹)": 500_000},
+         "Target (today, ₹)": 4_000_000, "Existing corpus (₹)": 500_000,
+         "Equity override %": None},
         {"Goal": "Retirement", "Type": "retirement", "Years": 28,
-         "Target (today, ₹)": 30_000_000, "Existing corpus (₹)": 2_000_000},
+         "Target (today, ₹)": 30_000_000, "Existing corpus (₹)": 2_000_000,
+         "Equity override %": None},
         {"Goal": "Car", "Type": "car", "Years": 4,
-         "Target (today, ₹)": 1_500_000, "Existing corpus (₹)": 0},
+         "Target (today, ₹)": 1_500_000, "Existing corpus (₹)": 0,
+         "Equity override %": None},
     ])
     edited = st.data_editor(
         default, num_rows="dynamic", use_container_width=True,
@@ -123,6 +132,9 @@ with tab_goals:
             "Type": st.column_config.SelectboxColumn(
                 options=list(CMA.goal_inflation.keys())),
             "Years": st.column_config.NumberColumn(min_value=1, max_value=45, step=1),
+            "Equity override %": st.column_config.NumberColumn(
+                min_value=0, max_value=100, step=5,
+                help="Optional. Blank = auto allocation."),
         },
     )
     st.session_state["goals"] = edited
@@ -160,11 +172,17 @@ with tab_plan:
             corpus = 0.0 if pd.isna(corpus_val) else float(corpus_val)
             gtype = "other" if pd.isna(g["Type"]) else str(g["Type"])
 
-            p = plan_goal(rr.profile, goal_name, gtype, yrs, tgt, corpus)
+            ov_val = g.get("Equity override %", None)
+            equity_override = None
+            if ov_val is not None and not pd.isna(ov_val):
+                equity_override = float(ov_val) / 100.0
+
+            p = plan_goal(rr.profile, goal_name, gtype, yrs, tgt, corpus,
+                          equity_override=equity_override)
             plans.append(p)
             goal_dicts.append({"name": p.name, "years": yrs, "target_today": tgt})
             rows.append({
-                "Goal": p.name,
+                "Goal": p.name + (" *" if p.overridden else ""),
                 "Years": yrs,
                 "Equity": f"{p.equity:.0%}",
                 "Debt": f"{p.debt:.0%}",
@@ -179,6 +197,8 @@ with tab_plan:
             st.stop()
 
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        if any(p.overridden for p in plans):
+            st.caption("\\* Allocation manually overridden for this goal.")
 
         blend = portfolio_allocation(rr.profile, goal_dicts)
         ga = gap_analysis(plans, st.session_state.get("capacity", 0))
@@ -197,9 +217,39 @@ with tab_plan:
             )
         st.caption(
             "Allocation per goal is the risk-profile equity weight, capped by a "
-            "horizon glide-path (short goals are de-risked). Stage 2 will map "
-            "these equity/debt weights to specific fund categories."
+            "horizon glide-path (short goals are de-risked)."
         )
+
+        # ---- Stage 2: fund categories -------------------------------------- #
+        st.divider()
+        st.markdown("### Suggested fund categories")
+        st.caption(
+            "SEBI scheme categories only — no scheme names. Equity is shaped by "
+            "risk profile; debt is duration-matched to each goal's horizon; "
+            "credit quality is kept high by default."
+        )
+
+        agg = aggregate_categories(plans)
+        st.markdown("**Portfolio-level (corpus-weighted across goals)**")
+        agg_rows = [{
+            "Category": r["category"],
+            "Sleeve": r["sleeve"],
+            "Weight": f"{r['weight']*100:.1f}%",
+        } for r in agg]
+        st.dataframe(pd.DataFrame(agg_rows), use_container_width=True, hide_index=True)
+
+        with st.expander("Per-goal category breakdown"):
+            for p in plans:
+                st.markdown(f"**{p.name}** — {p.equity:.0%} equity / {p.debt:.0%} debt, "
+                            f"{p.years:g}y horizon")
+                gr = [{
+                    "Category": r["category"],
+                    "Sleeve": r["sleeve"],
+                    "Weight": f"{r['weight']*100:.1f}%",
+                } for r in p.fund_categories]
+                st.dataframe(pd.DataFrame(gr), use_container_width=True, hide_index=True)
+                if p.exec_note:
+                    st.caption("↪ " + p.exec_note)
 
         st.divider()
         st.markdown("#### Download report")
