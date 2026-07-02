@@ -23,6 +23,7 @@ import math
 
 from config import CMA
 from allocator import goal_allocation
+from funds import fund_category_allocation, execution_note
 
 
 @dataclass
@@ -40,6 +41,10 @@ class GoalPlan:
     funding_gap: float          # FV still to be funded by SIP
     required_sip: float         # monthly
     required_lumpsum: float     # today, if funded as a one-shot instead
+    overridden: bool = False    # allocation was manually set
+    auto_equity: float = 0.0    # what the engine would have chosen
+    fund_categories: list = None  # Stage 2 category breakdown
+    exec_note: str = ""
 
 
 def blended_return(equity_w: float, debt_w: float,
@@ -86,13 +91,24 @@ def required_monthly_sip(fv_gap: float, annual_return: float, years: float,
 
 def plan_goal(profile: str, name: str, goal_type: str, years: float,
               target_today: float, existing_corpus: float = 0.0,
-              inflation: float = None) -> GoalPlan:
-    """Build a full funding plan for a single goal."""
-    alloc = goal_allocation(profile, years)
-    infl = CMA.inflation_for(goal_type) if inflation is None else inflation
+              inflation: float = None, equity_override: float = None) -> GoalPlan:
+    """Build a full funding plan for a single goal.
 
+    equity_override: if provided (0-1), replaces the engine's allocation for
+    this goal — used for manual advisor overrides.
+    """
+    auto = goal_allocation(profile, years)
+    if equity_override is None:
+        equity = auto.equity
+        overridden = False
+    else:
+        equity = round(min(max(equity_override, 0.0), 1.0), 2)
+        overridden = abs(equity - auto.equity) > 1e-9
+    debt = round(1 - equity, 2)
+
+    infl = CMA.inflation_for(goal_type) if inflation is None else inflation
     fv = future_value_of_goal(target_today, years, infl)
-    r = blended_return(alloc.equity, alloc.debt)
+    r = blended_return(equity, debt)
 
     corpus_fv = existing_corpus * (1 + r) ** years
     gap = max(0.0, fv - corpus_fv)
@@ -103,14 +119,18 @@ def plan_goal(profile: str, name: str, goal_type: str, years: float,
         years=years,
         target_today=round(target_today, 0),
         future_value=round(fv, 0),
-        equity=alloc.equity,
-        debt=alloc.debt,
+        equity=equity,
+        debt=debt,
         blended_return=round(r, 4),
         existing_corpus=round(existing_corpus, 0),
         corpus_future_value=round(corpus_fv, 0),
         funding_gap=round(gap, 0),
         required_sip=required_monthly_sip(gap, r, years),
         required_lumpsum=round(required_lumpsum(gap, r, years), 0),
+        overridden=overridden,
+        auto_equity=auto.equity,
+        fund_categories=fund_category_allocation(profile, equity, debt, years),
+        exec_note=execution_note(equity, years),
     )
 
 
