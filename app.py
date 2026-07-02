@@ -215,3 +215,18 @@ with tab_plan:
             "Opens in any browser. To save as PDF, open it and use "
             "Print → Save as PDF."
         )
+
+# --------------------------------------------------------------------------- #
+#  Footer                                                                      #
+# --------------------------------------------------------------------------- #
+st.divider()
+st.markdown(
+    "<div style='text-align:center;color:#8a94a6;font-size:12.5px;line-height:1.7'>"
+    "Built by <b>Aditya Nair</b> &nbsp;·&nbsp; Equity Research &amp; Portfolio Analytics<br>"
+    "<a href='https://adityanair.co.in' target='_blank' style='color:#1b3a63'>adityanair.co.in</a>"
+    " &nbsp;·&nbsp; "
+    "<a href='https://github.com/adxcodegit' target='_blank' style='color:#1b3a63'>github.com/adxcodegit</a>"
+    "<br><span style='font-size:11px'>Educational tool. Not investment advice.</span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
