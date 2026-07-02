@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from config import (
     RISK_PROFILES,
     HORIZON_EQUITY_CAP,
-    LONG_HORIZON_EQUITY_FLOOR,
 )
 
 
@@ -58,11 +57,6 @@ def goal_allocation(profile: str, years: float) -> Allocation:
     cap = horizon_equity_cap(years)
 
     equity = min(base, cap)
-
-    # Long-horizon floor: keep some growth even for cautious investors on
-    # multi-decade goals (optional, configurable).
-    if years >= LONG_HORIZON_EQUITY_FLOOR["min_years"]:
-        equity = max(equity, LONG_HORIZON_EQUITY_FLOOR["floor"])
 
     equity = round(equity, 2)
     return Allocation(
