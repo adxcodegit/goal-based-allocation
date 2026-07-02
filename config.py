@@ -106,10 +106,3 @@ HORIZON_EQUITY_CAP = [
     (15, 0.80),   # 10-15 yr
     (999, 1.00),  # 15 yr+ : no horizon cap; profile governs
 ]
-
-# Floor on equity for very long goals so an ultra-conservative profile still
-# gets *some* growth over multi-decade horizons (optional guardrail).
-LONG_HORIZON_EQUITY_FLOOR = {
-    "min_years": 15,
-    "floor": 0.20,
-}
