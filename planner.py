@@ -19,6 +19,8 @@ matches how most SIP mandates are debited) using an effective monthly rate.
 
 from dataclasses import dataclass
 
+import math
+
 from config import CMA
 from allocator import goal_allocation
 
@@ -65,8 +67,10 @@ def required_monthly_sip(fv_gap: float, annual_return: float, years: float,
     Monthly investment needed to accumulate fv_gap over `years`.
     Uses an effective monthly rate; annuity-due by default (start of month).
     """
+    if not (math.isfinite(fv_gap) and math.isfinite(years)) or years <= 0 or fv_gap <= 0:
+        return 0.0
     n = int(round(years * 12))
-    if n <= 0 or fv_gap <= 0:
+    if n <= 0:
         return 0.0
 
     r_m = (1 + annual_return) ** (1 / 12) - 1
